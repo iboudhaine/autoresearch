@@ -2,13 +2,14 @@
 Model architecture, Muon optimizer, training loop.
 """
 
+import time
 from math import ceil
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-from prepare import get_train_loader, evaluate_model
+from prepare import get_train_loader, evaluate_model, TIME_BUDGET
 
 
 #############################################
@@ -21,19 +22,15 @@ def _zeropower_via_newtonschulz5(
     filter_meta_data: list[tuple],
     max_D: int,
     max_K: int,
-    current_step: int,
-    total_steps: int,
+    progress: float,
 ) -> list[torch.half]:
     a, b, c = (3.4576, -4.7391, 2.0843)
     eps_stable = 1e-05
     eps_gms = 1e-05
-    progress_ratio = current_step / max(1, total_steps)
 
     initial_target_mag = 0.5012
     final_target_mag = 0.0786
-    target_magnitude = (
-        initial_target_mag * (1 - progress_ratio) + final_target_mag * progress_ratio
-    )
+    target_magnitude = initial_target_mag * (1 - progress) + final_target_mag * progress
 
     # Use stack instead of pre-allocated tensor for better performance
     if not filter_meta_data:
@@ -101,7 +98,6 @@ class Muon(torch.optim.Optimizer):
         momentum=0.88,
         nesterov=True,
         norm_freq=1,
-        total_train_steps=None,
         weight_decay=0.0,
     ):
         defaults = dict(
@@ -109,13 +105,12 @@ class Muon(torch.optim.Optimizer):
             momentum=momentum,
             nesterov=nesterov,
             norm_freq=norm_freq,
-            total_train_steps=total_train_steps,
             weight_decay=weight_decay,
         )
         super().__init__(params, defaults)
         self.step_count = 0
         self.last_norm_step = 0
-        self.total_train_steps = total_train_steps
+        self.progress = 0.0
         self.filter_params_meta = []
         self.max_D, self.max_K = (0, 0)
         for group in self.param_groups:
@@ -140,8 +135,7 @@ class Muon(torch.optim.Optimizer):
     def step(self):
         self.step_count += 1
         group = self.param_groups[0]
-        progress = self.step_count / self.total_train_steps
-        group["norm_freq"] = 2 + int(15 * progress)
+        group["norm_freq"] = 2 + int(15 * self.progress)
         # Prepare momentum buffers and track meta data
         filter_params_with_grad = []
         filter_meta_for_current_step = []
@@ -209,8 +203,7 @@ class Muon(torch.optim.Optimizer):
             filter_meta_for_current_step,
             self.max_D,
             self.max_K,
-            self.step_count,
-            self.total_train_steps,
+            self.progress,
         )
 
         # Apply updates in a single fused operation when possible
@@ -365,7 +358,6 @@ def train():
 
     train_loader = get_train_loader(training_batch_size)
 
-    total_train_steps = ceil(7.65 * len(train_loader))
     whiten_bias_train_steps = ceil(0.2 * len(train_loader))
     model.reset()
 
@@ -389,7 +381,6 @@ def train():
         momentum=0.655,
         nesterov=True,
         norm_freq=4,
-        total_train_steps=total_train_steps,
         weight_decay=wd,
     )
     optimizer2.param_groups[0]["momentum_buffer_dtype"] = torch.half
@@ -400,7 +391,7 @@ def train():
     # For accurately timing GPU code
     starter = torch.cuda.Event(enable_timing=True)
     ender = torch.cuda.Event(enable_timing=True)
-    time_seconds = 0.0
+    wall_seconds = 0.0
 
     def start_timer():
         starter.record()
@@ -408,8 +399,8 @@ def train():
     def stop_timer():
         ender.record()
         torch.cuda.synchronize()
-        nonlocal time_seconds
-        time_seconds += 1e-3 * starter.elapsed_time(ender)
+        nonlocal wall_seconds
+        wall_seconds += 1e-3 * starter.elapsed_time(ender)
 
     step = 0
     start_timer()
@@ -419,7 +410,6 @@ def train():
 
     # Precompute LR factors to reduce computation in training loop
     lr_factor1_base = 1.0 / max(1, whiten_bias_train_steps)
-    lr_factor2_base = 1.0 / total_train_steps
 
     # Precompute some values to reduce computation in training loop
     lr_factor1_initial = optimizer1.param_groups[0]["initial_lr"]
@@ -433,7 +423,10 @@ def train():
         loss = F.cross_entropy(outputs, labels, label_smoothing=0.09, reduction="sum")
         return loss
 
-    for epoch in range(ceil(total_train_steps / len(train_loader))):
+    training_seconds = 0.0
+    t_prev = None
+    done = False
+    while not done:
         ####################
         #     Training     #
         ####################
@@ -446,9 +439,10 @@ def train():
             loss = forward_step(inputs, labels, whiten_bias_grad)
             loss.backward()
 
-            # Update learning rates more efficiently
-            lr_factor1 = 1 - step * lr_factor1_base
-            lr_factor2 = 1 - step * lr_factor2_base
+            # Time-based progress drives the main LR schedule and Muon ramps
+            progress = min(training_seconds / TIME_BUDGET, 1.0)
+            lr_factor1 = max(0.0, 1 - step * lr_factor1_base)
+            lr_factor2 = 1 - progress
 
             # Apply learning rates in a fused way
             optimizer1.param_groups[0]["lr"] = lr_factor1_initial * lr_factor1
@@ -457,23 +451,34 @@ def train():
             ):
                 group["lr"] = lr_factors2_initial[i] * lr_factor2
 
+            # Muon reads progress from this attribute
+            optimizer2.progress = progress
+
             # Optimizer steps
             for opt in optimizers:
                 opt.step()
                 opt.zero_grad(set_to_none=True)
 
+            # Accumulate wall-clock for the budget, skipping the first 10 steps
+            # to exclude compile/autotune overhead.
+            torch.cuda.synchronize()
+            t_now = time.perf_counter()
+            if t_prev is not None and step > 10:
+                training_seconds += t_now - t_prev
+            t_prev = t_now
+
             step += 1
-            if step >= total_train_steps:
+            if step > 10 and training_seconds >= TIME_BUDGET:
+                done = True
                 break
-        if step >= total_train_steps:
-            break
 
     stop_timer()
-    return model, time_seconds
+    return model, wall_seconds, training_seconds
 
 
 if __name__ == "__main__":
-    model, train_time = train()
+    model, wall_seconds, training_seconds = train()
     acc = evaluate_model(model)
-    print(f"train_time_seconds: {train_time:.4f}")
+    print(f"training_seconds: {training_seconds:.4f}")
+    print(f"wall_seconds: {wall_seconds:.4f}")
     print(f"tta_val_acc: {acc:.6f}")
