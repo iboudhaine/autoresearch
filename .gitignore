@@ -1,0 +1,18 @@
+# Original repository
+cifar10-speedrun/
+
+# Env
+.venv/
+
+# Python
+__pycache__/
+
+# Data
+cifar10/
+
+# Logs
+results.tsv
+*.log
+
+# Claude
+.claude/
