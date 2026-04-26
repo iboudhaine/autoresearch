@@ -351,6 +351,7 @@ class CifarNet(nn.Module):
 
 def train():
     model = CifarNet().cuda().to(memory_format=torch.channels_last)
+    model = torch.compile(model)
     torch.cuda.reset_peak_memory_stats()
     training_batch_size = 1536
     bias_lr = 0.0573
