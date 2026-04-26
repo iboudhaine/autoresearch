@@ -351,6 +351,7 @@ class CifarNet(nn.Module):
 
 def train():
     model = CifarNet().cuda().to(memory_format=torch.channels_last)
+    torch.cuda.reset_peak_memory_stats()
     training_batch_size = 1536
     bias_lr = 0.0573
     head_lr = 0.5415
@@ -479,12 +480,18 @@ def train():
                 break
 
     stop_timer()
-    return model, wall_seconds, training_seconds
+    return model, wall_seconds, training_seconds, step
 
 
 if __name__ == "__main__":
-    model, wall_seconds, training_seconds = train()
+    model, wall_seconds, training_seconds, num_steps = train()
     acc = evaluate_model(model)
+    peak_vram_mb = torch.cuda.max_memory_allocated() / 1e6
+    num_params_m = sum(p.numel() for p in model.parameters()) / 1e6
+    print("---")
     print(f"training_seconds: {training_seconds:.4f}")
     print(f"wall_seconds: {wall_seconds:.4f}")
+    print(f"peak_vram_mb: {peak_vram_mb:.1f}")
+    print(f"num_steps: {num_steps}")
+    print(f"num_params_M: {num_params_m:.2f}")
     print(f"tta_val_acc: {acc:.6f}")
