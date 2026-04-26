@@ -468,6 +468,12 @@ def train():
             t_prev = t_now
 
             step += 1
+            if step % 10 == 0:
+                print(
+                    f"step {step:4d} | training_seconds {training_seconds:6.1f} "
+                    f"| progress {progress:7.2%} | lr2 {lr_factor2:.3f} "
+                    f"| loss {loss.item() / len(inputs):.3f}"
+                )
             if step > 10 and training_seconds >= TIME_BUDGET:
                 done = True
                 break
