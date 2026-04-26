@@ -20,7 +20,7 @@ DATA_PATH = "cifar10"
 TEST_BATCH_SIZE = 250
 TTA_INITIAL_BATCH = 250
 TTA_UNCERTAIN_BATCH = 250
-TIME_BUDGET = 300
+TIME_BUDGET = 420
 
 
 #############################################
