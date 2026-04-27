@@ -370,8 +370,8 @@ def train():
         p for n, p in model.named_parameters() if "norm" in n and p.requires_grad
     ]
     param_configs = [
-        dict(params=[model.whiten.bias], lr=bias_lr, weight_decay=wd / bias_lr),
-        dict(params=norm_biases, lr=bias_lr, weight_decay=wd / bias_lr),
+        dict(params=[model.whiten.bias], lr=bias_lr, weight_decay=0.0),
+        dict(params=norm_biases, lr=bias_lr, weight_decay=0.0),
         dict(params=[model.head.weight], lr=head_lr, weight_decay=wd / head_lr),
     ]
     optimizer1 = torch.optim.SGD(
