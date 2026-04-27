@@ -33,6 +33,29 @@ It's deliberately simple.
 
 The "how do you read usage?" part: it's an undocumented endpoint. You can pull it out yourself by running Claude Code through a debug proxy (I used mitmproxy in my case), invoking the `/usage` command, and reading the request off the wire. `claude_usage.sh` wraps that endpoint and returns the utilization percentage and reset time as JSON.
 
+```mermaid
+flowchart LR
+    subgraph S1["tmux: autoresearch session"]
+        A[claude code agent]
+        T[train.py]
+        H["prior context<br/>(results.tsv + git log)"]
+        A -->|edits| T
+        T -->|runs experiment,<br/>logs result, commits| H
+        H -.->|reads past attempts| A
+    end
+
+    subgraph S2["tmux: watcher session"]
+        W[watcher.sh]
+        U[claude_usage.sh]
+        API[(Anthropic)]
+        W -->|checks every 5 min| U
+        U -->|usage endpoint| API
+    end
+
+    W -.->|under quota: keep polling| W
+    W ==>|quota reached:<br/>wait until reset,<br/>then nudge agent to continue| A
+```
+
 ## Status and contributions
 
 I'll keep iterating on this until it either lands somewhere I'm happy with or I find a harness that works better and rebuild on top of it. Either way I'll be using it for my own work and will post back with whatever comes out.
