@@ -69,3 +69,5 @@ Issues, PRs, and discussion are all welcome - particularly if you have:
 ### On the experiment design specifically
 
 I said the task results don't matter much to me, but I am curious what people who've done this seriously would do differently. My honest read: a stronger GPU plus per-variant seed averaging would obviously be the right move, but with my hardware that would mean drastically fewer experiments per reset window, and "lots of cheap experiments" is the entire reason for using a loop like this. So I kind of traded statistical rigor for throughput, knowing it's a compromise. I'm not pretending that's the principled choice - if you'd weigh it differently or see a smarter middle ground, I'd genuinely like to hear it.
+
+For more details about the experiment itself - the setup, what changed, the results, what I make of it - check the [`autoresearch/apr27`](https://github.com/iboudhaine/autoresearch/tree/autoresearch/apr27) branch, I wrote a separate README there going through all of it.
